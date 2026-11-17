@@ -10,6 +10,17 @@ resources:
 - ../../base/analytics-service
 - ../../base/jobs
 
+patches:
+- target:
+    kind: Deployment
+    name: (auth-service|flag-service|targeting-service|evaluation-service|analytics-service)
+  patch: |-
+    - op: add
+      path: /spec/template/spec/containers/0/env
+      value:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://collector-gateway-opentelemetry-collector.observability.svc.cluster.local:4318
+
 # Schemas SQL dos Jobs de db-init são gerados em ../../base/jobs (ver kustomization.yaml lá)
 # a partir dos arquivos copiados de services/<svc>/db/init.sql.
 # O namespace e os Secrets são geridos pelo Terraform. Ingress HTTP público
