@@ -53,7 +53,7 @@ func TestFetchFromServicesPropagatesConcurrentContexts(t *testing.T) {
 	}
 	wg.Wait()
 	if seen["primeiro"] != 2 || seen["segundo"] != 2 {
-		t.Errorf("contextos cruzados ou ausentes: %v", seen)
+		t.Errorf("contexts crossed or missing: %v", seen)
 	}
 }
 
