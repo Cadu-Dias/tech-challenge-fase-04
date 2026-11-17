@@ -1,0 +1,120 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: toggle-self-healing
+  namespace: toggle
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: toggle-self-healing-state
+  namespace: toggle
+data:
+  state: '{}'
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: toggle-self-healing
+  namespace: toggle
+rules:
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    resourceNames: ["auth-service"]
+    verbs: ["get", "patch"]
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    resourceNames: ["toggle-self-healing-state"]
+    verbs: ["get", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: toggle-self-healing
+  namespace: toggle
+subjects:
+  - kind: ServiceAccount
+    name: toggle-self-healing
+    namespace: toggle
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: toggle-self-healing
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toggle-self-healing
+  namespace: toggle
+spec:
+  replicas: 1
+  selector:
+    matchLabels: {app: toggle-self-healing}
+  template:
+    metadata:
+      labels: {app: toggle-self-healing}
+    spec:
+      serviceAccountName: toggle-self-healing
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        seccompProfile: {type: RuntimeDefault}
+      containers:
+        - name: responder
+          image: toggle/self-healing-responder:phase04-initial
+          ports:
+            - {name: http, containerPort: 8080}
+          env:
+            - {name: WEBHOOK_TOKEN_FILE, value: /var/run/webhook/token}
+            - {name: WEBHOOK_TLS_CERT_FILE, value: /var/run/webhook-tls/tls.crt}
+            - {name: WEBHOOK_TLS_KEY_FILE, value: /var/run/webhook-tls/tls.key}
+          volumeMounts:
+            - {name: webhook-token, mountPath: /var/run/webhook, readOnly: true}
+            - {name: webhook-tls, mountPath: /var/run/webhook-tls, readOnly: true}
+          readinessProbe:
+            httpGet: {path: /health, port: http, scheme: HTTPS}
+          livenessProbe:
+            httpGet: {path: /health, port: http, scheme: HTTPS}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "25m", memory: "32Mi"}
+            limits: {cpu: "200m", memory: "128Mi"}
+      volumes:
+        - name: webhook-token
+          secret:
+            secretName: toggle-self-healing-webhook
+        - name: webhook-tls
+          secret:
+            secretName: toggle-self-healing-tls
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toggle-self-healing
+  namespace: toggle
+spec:
+  type: ClusterIP
+  selector: {app: toggle-self-healing}
+  ports:
+    - {name: http, port: 8080, targetPort: http}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: toggle-self-healing-ingress
+  namespace: toggle
+spec:
+  podSelector:
+    matchLabels: {app: toggle-self-healing}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: observability}
+          podSelector:
+            matchLabels: {app.kubernetes.io/name: grafana}
+      ports:
+        - {protocol: TCP, port: 8080}

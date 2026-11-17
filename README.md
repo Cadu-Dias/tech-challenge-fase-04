@@ -1,8 +1,10 @@
 # ToggleMaster — Fase 04 em implementação
 
-> **Entrega incompleta:** esta pasta parte da fase 03; há instrumentação
-> parcial de traces, mas a stack de observabilidade, alertas, self-healing e
-> prova no EKS ainda não estão implementados ou comprovados. As instruções
+> **Entrega incompleta:** os cinco serviços foram sincronizados no EKS e o
+> fluxo sintético até DynamoDB foi verificado. A stack de observabilidade no
+> EKS, integrações externas e prova de self-healing ainda não foram comprovadas.
+> O ambiente local e o responder experimental não substituem essas evidências.
+> As instruções
 > históricas abaixo descrevem a fase 03 e **não autorizam sua execução** na
 > fase 04.
 >
@@ -11,9 +13,8 @@
 > dono operacional; confirme a conta, o inventário, os custos e o plano antes
 > de criar recursos. Não execute bootstrap, apply, destroy, import ou alterações
 > de state sem autorização específica para cada operação.
-> Não use o workaround histórico de `untaint`/`-refresh=false` como
-> procedimento automático. O overlay `prod`, imagens e referências AWS
-> herdados precisam ser reconciliados antes de qualquer deploy.
+> Não use `untaint` ou `-refresh=false` para contornar a restrição do bootstrap.
+> O overlay `prod` é um nome herdado do laboratório, não produção real.
 >
 > Publicação de imagens e atualização GitOps via CI estão desabilitadas por
 > padrão. A variável de repositório `ENABLE_IMAGE_PUBLISH=true` só deve ser
@@ -110,72 +111,46 @@ via GitOps (a partir de `gitops/overlays/prod`).
 
 ### 1. Pré-requisitos
 
-- Terraform >= 1.9, AWS CLI, `kubectl`.
+- Terraform >= 1.10, AWS CLI, `kubectl`.
 - Credenciais do AWS Academy Learner Lab em `~/.aws/credentials` (perfil `default`).
 
-### 2. Bootstrap do backend remoto (bucket S3 do state)
+### 2. Backend remoto e bootstrap
 
-```bash
-cd infra/bootstrap
-terraform init
-terraform apply
-```
-
-> ⚠️ **SCP do Academy**: a primeira `apply` pode falhar com
-> `AccessDenied: s3:GetBucketObjectLockConfiguration` durante o *refresh* automático
-> pós-criação do `aws_s3_bucket`. O bucket **é criado com sucesso** apesar do erro; o
-> Terraform apenas marca o recurso como `(tainted)`. Para completar o restante dos
-> recursos (versionamento, criptografia, bloqueio de acesso público) sem disparar a
-> mesma leitura proibida:
-> ```bash
-> terraform untaint aws_s3_bucket.tfstate
-> terraform apply -refresh=false -auto-approve
-> ```
-> Depois disso, **nunca rode `terraform plan`/`apply` normal nesta stack novamente**
-> (ela não pode ser atualizada/destruída pela mesma razão); trate-a como *write-once*.
+No laboratório, o bootstrap Terraform criou o bucket mas falhou na leitura de
+Object Lock, negada por SCP, deixando o recurso `tainted` no state local. O
+bucket foi configurado por AWS CLI, sem remover ou alterar esse state. Preserve
+o state local fora do Git e não repita o apply do bootstrap, nem migre, importe
+ou remova state sem um plano e autorização específicos. A stack principal usa
+um backend S3 novo e independente da fase 03.
 
 ### 3. Stack principal (rede, EKS, dados, ArgoCD, ingress)
 
-```bash
-cd infra
-cp backend.hcl.example backend.hcl   # ajuste o nome do bucket se necessário
-terraform init -backend-config=backend.hcl
-terraform plan -out=tfplan
-terraform apply tfplan
-```
-
-Tempo esperado: **25–35 minutos** (EKS ~10-12min, RDS ~5-8min cada, em paralelo).
-As credenciais do Lab expiram em poucas horas — se o apply falhar no meio com
-`ExpiredToken`/`InvalidClientTokenId`, basta atualizar `~/.aws/credentials` e rodar
-`terraform apply tfplan` (ou um novo `plan`) novamente; o state em S3 permite retomar.
-
-Ao final, os outputs trazem: endpoints do RDS/Redis, URL da SQS, URIs do ECR, comando
-para configurar o `kubectl` e o comando de `port-forward` da UI do ArgoCD.
+O apply autorizado criou a infraestrutura e instalou ArgoCD e ingress-nginx.
+Antes de qualquer alteração posterior, confirme conta e backend, gere um novo
+plano e revise alterações e custos; não reaplique planos antigos após falhas.
+Os outputs identificam os serviços criados, mas podem conter dados sensíveis.
 
 ### 4. Build e push das imagens (primeira vez, antes do primeiro sync do ArgoCD)
 
-O `ArgoCD Application` já é criado apontando para `gitops/overlays/prod`, mas os
-Deployments referenciam a tag `latest` de cada repositório ECR. Rode os 5 workflows de
-CI (ou faça manualmente `docker build && docker push`) pelo menos uma vez para publicar
-as imagens antes do primeiro sync ficar `Healthy`.
+As cinco imagens iniciais foram publicadas no ECR do laboratório com a tag
+imutável `phase04-initial`. O Application recebe os registros dos outputs
+Terraform; as tags ficam nos kustomizations de cada serviço.
 
 ### 5. Validar
 
-```bash
-$(terraform output -raw configure_kubectl 2>/dev/null || echo "aws eks update-kubeconfig --region us-east-1 --name togglemaster-eks")
-kubectl get pods -n toggle
-kubectl get ingress -n toggle
-kubectl get svc -n ingress-nginx ingress-nginx-controller   # aguardar o hostname do NLB
-```
+O Application ficou `Synced/Healthy` e os cinco deployments disponíveis. Um
+teste sintético verificou auth, flag, targeting, evaluation, SQS, analytics e
+DynamoDB via port-forward local e removeu os dados criados. O overlay não
+habilita os Ingresses HTTP herdados; a exposição externa depende de TLS e
+revisão específicos.
 
 ### 6. Destruir (evitar consumo de créditos do Lab)
 
-```bash
-cd infra
-terraform destroy
-# infra/bootstrap NÃO deve ser destruído por este workflow (mesma SCP); apague o bucket
-# manualmente via console/CLI se necessário ao final do curso.
-```
+Destruição de infraestrutura ou do bucket de state exige revisão e autorização
+específicas. O EKS 1.31 está em suporte estendido até 26/11/2026; o preço público
+consultado para o plano de controle nesse regime é US$ 0,60/h, além dos demais
+recursos. Consulte [versões EKS](https://docs.aws.amazon.com/eks/latest/userguide/kubernetes-versions.html)
+e [preços EKS](https://aws.amazon.com/eks/pricing/) antes de planejar upgrade ou custos.
 
 ---
 
@@ -208,8 +183,9 @@ por `pull_request`/`push` filtrado por `paths: services/<serviço>/**`:
 3. **security** — Trivy *filesystem scan* (SCA/dependências) + `gosec`/`bandit` (SAST).
    Achados `CRITICAL` **bloqueiam** os jobs seguintes.
 4. **docker** *(só em push na `main`)* — build da imagem, Trivy *image scan*
-   (`CRITICAL` bloqueia o push), login no ECR, push com tag `v1.0.0-<sha7>` + `latest`.
-5. **gitops-bump** — `kustomize edit set image` em `gitops/overlays/prod`, commit com
+   (`CRITICAL` bloqueia o push), login no ECR e push com tag `v1.0.0-<sha7>`.
+   O job depende de `ENABLE_IMAGE_PUBLISH=true`.
+5. **gitops-bump** — `kustomize edit set image` na base do serviço, commit com
    `[skip ci]` e push na `main`.
 
 O ArgoCD (instalado pelo Terraform, `sync automático` com `prune: true, selfHeal: true`)

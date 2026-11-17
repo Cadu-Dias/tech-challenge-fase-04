@@ -1,0 +1,33 @@
+name: CI - observability and self-healing
+
+on:
+  pull_request:
+    paths:
+      - "automation/self-healing/**"
+      - "gitops/observability/**"
+      - ".github/workflows/ci-observability.yml"
+  push:
+    branches: [main]
+    paths:
+      - "automation/self-healing/**"
+      - "gitops/observability/**"
+      - ".github/workflows/ci-observability.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Test responder
+        working-directory: automation/self-healing
+        run: python -m unittest -v
+      - name: Test alert expression
+        run: ruby gitops/observability/grafana/tests/test-alert.rb
+      - name: Build responder image without publishing
+        run: docker build -t self-healing:test automation/self-healing

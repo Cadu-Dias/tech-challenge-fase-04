@@ -13,6 +13,7 @@ groups:
         execErrState: Error
         labels:
           service: auth-service
+          namespace: toggle
           severity: critical
         annotations:
           summary: Auth acima de 5% de erros 5xx por dois minutos, com pelo menos 20 requisições.
