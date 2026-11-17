@@ -6,10 +6,10 @@ positions:
   filename: /tmp/positions.yaml
 
 clients:
-  - url: http://loki:3100/loki/api/v1/push
+  - url: http://otel-collector:3500/loki/api/v1/push
 
 scrape_configs:
-  # Descobre apenas os containers deste compose e envia seus logs ao Loki.
+  # Descobre apenas os containers deste compose e envia logs ao Collector.
   - job_name: docker
     docker_sd_configs:
       - host: unix:///var/run/docker.sock
@@ -18,6 +18,9 @@ scrape_configs:
           - name: label
             values: ["com.docker.compose.project=togglemaster-local"]
     relabel_configs:
+      - source_labels: [__meta_docker_container_label_com_docker_compose_service]
+        regex: otel-collector|promtail
+        action: drop
       - source_labels: [__meta_docker_container_label_com_docker_compose_service]
         target_label: service
       - source_labels: [__meta_docker_container_name]

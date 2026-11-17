@@ -13,5 +13,9 @@ e migre usuários e configuração de autenticação antes de reutilizá-los.
 O Promtail monta o socket Docker para descobrir logs. Mesmo montado como somente
 leitura, o socket permite controle privilegiado do daemon: use este ambiente
 apenas em máquina e projetos confiáveis. Não o exponha em uma rede compartilhada.
+Os logs passam pelo receptor Loki do Collector (alpha na versão local), são
+agrupados por serviço e exportados via OTLP HTTP ao Loki. Collector e Promtail
+são excluídos da coleta para evitar recursão. Esse fluxo local não configura
+envio externo; logs legados ainda precisam de revisão antes do uso com Datadog.
 LocalStack, Grafana e demais componentes locais não comprovam execução no EKS
 ou entrega a Datadog, PagerDuty e Teams.

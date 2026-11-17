@@ -95,7 +95,7 @@
       "id": 9, "type": "logs", "title": "Logs por serviço",
       "gridPos": {"x": 0, "y": 24, "w": 24, "h": 10},
       "datasource": {"type": "loki", "uid": "loki"},
-      "targets": [{"refId": "A", "expr": "{service=~\"$service\"}"}],
+      "targets": [{"refId": "A", "expr": "{service_name=~\"$service\"}"}],
       "options": {"showTime": true, "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending"}
     }
   ]

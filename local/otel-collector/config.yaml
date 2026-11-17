@@ -1,4 +1,9 @@
 receivers:
+  loki:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:3500
+    use_incoming_timestamp: true
   otlp:
     protocols:
       grpc:
@@ -8,8 +13,18 @@ receivers:
 
 processors:
   batch: {}
+  groupbyattrs:
+    keys: [service]
   resource:
     attributes:
+      - key: deployment.environment
+        value: local
+        action: upsert
+  resource/logs:
+    attributes:
+      - key: service.name
+        from_attribute: service
+        action: upsert
       - key: deployment.environment
         value: local
         action: upsert
@@ -31,6 +46,8 @@ exporters:
     endpoint: 0.0.0.0:8889
     resource_to_telemetry_conversion:
       enabled: true
+  otlphttp/loki:
+    endpoint: http://loki:3100/otlp
 
 service:
   pipelines:
@@ -42,3 +59,7 @@ service:
       receivers: [otlp, spanmetrics]
       processors: [resource, batch]
       exporters: [prometheus]
+    logs:
+      receivers: [loki]
+      processors: [groupbyattrs, resource/logs, batch]
+      exporters: [otlphttp/loki]

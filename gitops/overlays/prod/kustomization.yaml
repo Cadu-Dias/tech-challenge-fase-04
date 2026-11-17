@@ -3,16 +3,16 @@ kind: Kustomization
 namespace: toggle
 
 resources:
-- ../../base/namespace
 - ../../base/auth-service
 - ../../base/flag-service
 - ../../base/targeting-service
 - ../../base/evaluation-service
 - ../../base/analytics-service
-- ../../base/ingress
 - ../../base/jobs
 
 # Schemas SQL dos Jobs de db-init são gerados em ../../base/jobs (ver kustomization.yaml lá)
 # a partir dos arquivos copiados de services/<svc>/db/init.sql.
+# O namespace e os Secrets são geridos pelo Terraform. Ingress HTTP público
+# permanece desabilitado até existir uma configuração TLS revisada.
 
 # O Application do ArgoCD recebe os registros ECR dos outputs do Terraform.
