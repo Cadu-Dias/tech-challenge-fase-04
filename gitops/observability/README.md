@@ -1,8 +1,22 @@
 # Observabilidade no laboratório EKS
 
 `root-application.yaml` cria aplicações Argo CD separadas para os backends e
-os Collectors. Não há ingress, notificações ou exportação a serviços externos.
+os Collectors e para o Grafana. Não há ingress, notificações ou exportação a serviços externos.
 As aplicações usam sincronização automática sem prune.
+
+Antes de publicar a aplicação Grafana, deve existir no namespace
+`observability` o Secret `grafana-admin`, com as chaves não vazias `username`
+e `password`, provisionado por um mecanismo seguro fora do Git. O acesso
+anônimo está desabilitado e o Service é interno (`ClusterIP`); para acesso
+local autenticado use `kubectl -n observability port-forward svc/grafana 3000:3000`.
+O banco do Grafana usa `emptyDir`: usuários, alterações pela interface e estado
+local são perdidos ao substituir o pod. O dashboard e as fontes são provisionados
+pelo Git. A mudança posterior do Secret não atualiza automaticamente a senha
+do administrador em um banco Grafana já inicializado.
+
+O dashboard inclui requisições e logs dos sinais existentes. Os painéis de
+CPU, memória, reinícios e réplicas dependem de métricas Kubernetes que o
+Prometheus atual não coleta; ficarão sem dados até existirem fontes adequadas.
 
 Prometheus e Loki usam `emptyDir` limitado e retenção de até 24 horas. Os dados
 são perdidos na substituição dos pods; a capacidade de provisionar volumes
