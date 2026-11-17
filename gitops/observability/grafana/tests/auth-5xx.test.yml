@@ -1,0 +1,47 @@
+rule_files:
+  - rules.yml
+evaluation_interval: 30s
+tests:
+  - name: erros acima do limiar com tráfego suficiente
+    interval: 30s
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="200"}'
+        values: '0 10 20 30 40'
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="500"}'
+        values: '0 1 2 3 4'
+    promql_expr_test:
+      - expr: 'auth:5xx_ratio'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'auth:5xx_ratio'
+            value: 0.09090909090909091
+  - name: tráfego insuficiente não dispara
+    interval: 30s
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="200"}'
+        values: '0 1 2 3 4'
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="500"}'
+        values: '0 1 2 3 4'
+    promql_expr_test:
+      - expr: 'auth:5xx_ratio'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'auth:5xx_ratio'
+            value: 0
+  - name: sem série de erros retorna zero
+    interval: 30s
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="200"}'
+        values: '0 10 20 30 40'
+    promql_expr_test:
+      - expr: 'auth:5xx_ratio'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'auth:5xx_ratio'
+            value: 0
+  - name: ausência de telemetria não é sucesso
+    interval: 30s
+    promql_expr_test:
+      - expr: 'auth:5xx_ratio'
+        eval_time: 2m
+        exp_samples: []

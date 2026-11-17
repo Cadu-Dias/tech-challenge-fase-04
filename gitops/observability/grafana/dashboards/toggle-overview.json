@@ -1,0 +1,102 @@
+{
+  "uid": "toggle-overview",
+  "title": "ToggleMaster — Observabilidade",
+  "schemaVersion": 39,
+  "version": 1,
+  "timezone": "browser",
+  "refresh": "30s",
+  "time": {"from": "now-1h", "to": "now"},
+  "templating": {
+    "list": [
+      {
+        "name": "service",
+        "label": "Serviço",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(traces_span_metrics_calls_total, service_name)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".+",
+        "current": {"selected": true, "text": "All", "value": "$__all"}
+      },
+      {
+        "name": "namespace",
+        "label": "Namespace Kubernetes",
+        "type": "query",
+        "datasource": {"type": "prometheus", "uid": "prometheus"},
+        "query": "label_values(kube_pod_info, namespace)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {"selected": true, "text": "All", "value": "$__all"}
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1, "type": "timeseries", "title": "Requisições por segundo",
+      "gridPos": {"x": 0, "y": 0, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (service_name) (rate(http_server_request_duration_seconds_count{service_name=~\"$service\"}[5m]))", "legendFormat": "{{service_name}}"}],
+      "fieldConfig": {"defaults": {"unit": "reqps"}, "overrides": []}
+    },
+    {
+      "id": 2, "type": "timeseries", "title": "Erros HTTP 5xx (%)",
+      "gridPos": {"x": 8, "y": 0, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "100 * ((sum by (service_name) (rate(http_server_request_duration_seconds_count{service_name=~\"$service\",http_response_status_code=~\"5..\"}[5m])) or 0 * sum by (service_name) (rate(http_server_request_duration_seconds_count{service_name=~\"$service\"}[5m]))) / clamp_min(sum by (service_name) (rate(http_server_request_duration_seconds_count{service_name=~\"$service\"}[5m])), 0.000001))", "legendFormat": "{{service_name}}"}],
+      "fieldConfig": {"defaults": {"unit": "percent", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 3, "type": "timeseries", "title": "Latência HTTP p95",
+      "gridPos": {"x": 16, "y": 0, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "histogram_quantile(0.95, sum by (le, service_name) (rate(http_server_request_duration_seconds_bucket{service_name=~\"$service\"}[5m])))", "legendFormat": "{{service_name}}"}],
+      "fieldConfig": {"defaults": {"unit": "s"}, "overrides": []}
+    },
+    {
+      "id": 4, "type": "timeseries", "title": "CPU por pod — Kubernetes",
+      "gridPos": {"x": 0, "y": 8, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (rate(container_cpu_usage_seconds_total{namespace=~\"$namespace\",pod=~\"$service.*\",container!=\"\",container!=\"POD\"}[5m]))", "legendFormat": "{{namespace}}/{{pod}}"}],
+      "fieldConfig": {"defaults": {"unit": "cores"}, "overrides": []}
+    },
+    {
+      "id": 5, "type": "timeseries", "title": "Memória por pod — Kubernetes",
+      "gridPos": {"x": 8, "y": 8, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (container_memory_working_set_bytes{namespace=~\"$namespace\",pod=~\"$service.*\",container!=\"\",container!=\"POD\"})", "legendFormat": "{{namespace}}/{{pod}}"}],
+      "fieldConfig": {"defaults": {"unit": "bytes"}, "overrides": []}
+    },
+    {
+      "id": 6, "type": "timeseries", "title": "Reinícios em uma hora — Kubernetes",
+      "gridPos": {"x": 16, "y": 8, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (namespace, pod) (increase(kube_pod_container_status_restarts_total{namespace=~\"$namespace\",pod=~\"$service.*\"}[1h]))", "legendFormat": "{{namespace}}/{{pod}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 7, "type": "timeseries", "title": "Réplicas disponíveis — Kubernetes",
+      "gridPos": {"x": 0, "y": 16, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "kube_deployment_status_replicas_available{namespace=~\"$namespace\",deployment=~\"$service\"}", "legendFormat": "{{namespace}}/{{deployment}}"}],
+      "fieldConfig": {"defaults": {"unit": "short", "min": 0}, "overrides": []}
+    },
+    {
+      "id": 8, "type": "timeseries", "title": "Mensagens processadas por segundo",
+      "gridPos": {"x": 8, "y": 16, "w": 8, "h": 8},
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "targets": [{"refId": "A", "expr": "sum by (outcome) (rate(togglemaster_sqs_processed_total{service_name=~\"$service\"}[5m]))", "legendFormat": "{{outcome}}"}],
+      "fieldConfig": {"defaults": {"unit": "ops"}, "overrides": []}
+    },
+    {
+      "id": 9, "type": "logs", "title": "Logs por serviço",
+      "gridPos": {"x": 0, "y": 24, "w": 24, "h": 10},
+      "datasource": {"type": "loki", "uid": "loki"},
+      "targets": [{"refId": "A", "expr": "{service=~\"$service\"}"}],
+      "options": {"showTime": true, "showLabels": true, "wrapLogMessage": true, "sortOrder": "Descending"}
+    }
+  ]
+}

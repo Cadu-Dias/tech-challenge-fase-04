@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: analytics-config
+  namespace: toggle
+data:
+  PORT: "8005"
+  WORKER_THREADS: "8"

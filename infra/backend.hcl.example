@@ -1,0 +1,7 @@
+# Copie para backend.hcl (git-ignorado) e ajuste o bucket conforme o output
+# `state_bucket_name` da stack infra/bootstrap.
+#
+# Uso: terraform init -backend-config=backend.hcl
+
+bucket = "substitua-pelo-bucket-de-state"
+region = "us-east-1"

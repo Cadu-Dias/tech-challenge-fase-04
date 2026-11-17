@@ -1,0 +1,48 @@
+# Terraform
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfplan.*
+crash.log
+crash.*.log
+*.tfvars
+!*.tfvars.example
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Env / secrets
+.env
+*.pem
+*.key
+kubeconfig*
+**/kubeconfig*
+datadog-config.sh
+
+# Go
+services/**/vendor/
+
+# Python
+**/__pycache__/
+*.pyc
+.venv/
+
+# OS
+.DS_Store
+.venv/
+
+# Python venvs used only locally during development/tests
+.venv/
+__pycache__/
+
+# Compiled Go binaries (produced by `go build`/`go test`)
+services/auth-service/auth-service
+services/evaluation-service/evaluation-service
+
+# Backend config with real bucket name (derived from account id)
+infra/backend.hcl
+infra/modules/argocd/.generated/
+infra/tfplan*
+infra/**/.generated/

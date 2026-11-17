@@ -1,0 +1,56 @@
+name: "GitOps bump"
+description: "Atualiza a tag lógica da imagem do serviço via kustomize e commita com [skip ci]."
+inputs:
+  service:
+    description: "Nome do serviço (ex: auth-service)."
+    required: true
+  image:
+    description: "URI completa da imagem (registry/repo)."
+    required: true
+  tag:
+    description: "Tag recém publicada no ECR."
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Instalar kustomize
+      shell: bash
+      run: |
+        if command -v kustomize >/dev/null 2>&1; then
+          echo "kustomize já disponível: $(kustomize version --short 2>/dev/null || kustomize version)"
+        else
+          curl -sfL "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash -s -- 5.4.3 /usr/local/bin
+        fi
+
+    - name: kustomize edit set image
+      shell: bash
+      working-directory: gitops/base/${{ inputs.service }}
+      run: |
+        kustomize edit set image "toggle/${{ inputs.service }}=toggle/${{ inputs.service }}:${{ inputs.tag }}"
+
+    - name: Commit e push do bump
+      shell: bash
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        git add "gitops/base/${{ inputs.service }}/kustomization.yaml"
+        if git diff --cached --quiet; then
+          echo "Nenhuma mudança de imagem a commitar."
+          exit 0
+        fi
+        git commit -m "chore(gitops): bump ${{ inputs.service }} to ${{ inputs.tag }} [skip ci]"
+
+        # Jobs de outros serviços podem commitar/pushar em paralelo no mesmo
+        # kustomization.yaml; usa rebase + retry para evitar 'rejected (fetch first)'.
+        for attempt in 1 2 3 4 5; do
+          if git push; then
+            exit 0
+          fi
+          echo "Push rejeitado (tentativa $attempt), rebaseando sobre origin/main..."
+          git fetch origin main
+          git rebase origin/main
+          sleep $((RANDOM % 5 + 1))
+        done
+
+        echo "::error::Falha ao dar push apos varias tentativas."
+        exit 1

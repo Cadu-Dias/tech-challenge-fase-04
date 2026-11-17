@@ -1,0 +1,158 @@
+# Ambiente local do ToggleMaster (fase 04): substitui RDS, ElastiCache, SQS e DynamoDB
+# por containers e sobe a stack de observabilidade (OTel Collector, Prometheus, Loki, Grafana).
+# Todas as credenciais abaixo são sintéticas e válidas somente nesta rede local.
+name: togglemaster-local
+
+x-aws-local: &aws-local
+  AWS_REGION: us-east-1
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  AWS_ENDPOINT_URL: http://localstack:4566
+  AWS_SQS_ENDPOINT_URL: http://localstack:4566
+  AWS_SQS_URL: http://localstack:4566/000000000000/togglemaster-evaluation-events
+
+x-otel: &otel
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
+  OTEL_RESOURCE_ATTRIBUTES: deployment.environment=local
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    command: ["postgres", "-c", "password_encryption=scram-sha-256"]
+    environment:
+      POSTGRES_HOST_AUTH_METHOD: scram-sha-256
+      POSTGRES_INITDB_ARGS: --auth-host=scram-sha-256
+      POSTGRES_USER: togglemaster
+      POSTGRES_PASSWORD: ${LOCAL_DB_PASSWORD:-local-only-password}
+      LOCAL_SERVICE_API_KEY: ${LOCAL_SERVICE_API_KEY:-local-service-key}
+    volumes:
+      - ./postgres/init-databases.sh:/docker-entrypoint-initdb.d/init-databases.sh:ro
+      - ../services/auth-service/db/init.sql:/schemas/auth.sql:ro
+      - ../services/flag-service/db/init.sql:/schemas/flag.sql:ro
+      - ../services/targeting-service/db/init.sql:/schemas/targeting.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U togglemaster -d targeting_db"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      retries: 10
+
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: sqs,dynamodb
+      AWS_DEFAULT_REGION: us-east-1
+    volumes:
+      - ./localstack/init-aws.sh:/etc/localstack/init/ready.d/init-aws.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal dynamodb describe-table --table-name ToggleMasterAnalytics >/dev/null"]
+      interval: 5s
+      retries: 30
+
+  auth-service:
+    build: ../services/auth-service
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: auth-service
+      PORT: "8001"
+      DATABASE_URL: postgres://togglemaster:${LOCAL_DB_PASSWORD:-local-only-password}@postgres:5432/auth_db?sslmode=disable
+      MASTER_KEY: ${LOCAL_MASTER_KEY:-local-master-key}
+    ports: ["127.0.0.1:8001:8001"]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  flag-service:
+    build: ../services/flag-service
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: flag-service
+      PORT: "8002"
+      DATABASE_URL: postgres://togglemaster:${LOCAL_DB_PASSWORD:-local-only-password}@postgres:5432/flag_db?sslmode=disable
+      AUTH_SERVICE_URL: http://auth-service:8001
+    ports: ["127.0.0.1:8002:8002"]
+    depends_on: [auth-service]
+
+  targeting-service:
+    build: ../services/targeting-service
+    environment:
+      <<: *otel
+      OTEL_SERVICE_NAME: targeting-service
+      PORT: "8003"
+      DATABASE_URL: postgres://togglemaster:${LOCAL_DB_PASSWORD:-local-only-password}@postgres:5432/targeting_db?sslmode=disable
+      AUTH_SERVICE_URL: http://auth-service:8001
+    ports: ["127.0.0.1:8003:8003"]
+    depends_on: [auth-service]
+
+  evaluation-service:
+    build: ../services/evaluation-service
+    environment:
+      <<: [*otel, *aws-local]
+      OTEL_SERVICE_NAME: evaluation-service
+      PORT: "8004"
+      REDIS_URL: redis://redis:6379
+      FLAG_SERVICE_URL: http://flag-service:8002
+      TARGETING_SERVICE_URL: http://targeting-service:8003
+      SERVICE_API_KEY: ${LOCAL_SERVICE_API_KEY:-local-service-key}
+    ports: ["127.0.0.1:8004:8004"]
+    depends_on:
+      redis: {condition: service_healthy}
+      localstack: {condition: service_healthy}
+      flag-service: {condition: service_started}
+      targeting-service: {condition: service_started}
+
+  analytics-service:
+    build: ../services/analytics-service
+    environment:
+      <<: [*otel, *aws-local]
+      OTEL_SERVICE_NAME: analytics-service
+      PORT: "8005"
+      AWS_DYNAMODB_TABLE: ToggleMasterAnalytics
+    ports: ["127.0.0.1:8005:8005"]
+    depends_on:
+      localstack: {condition: service_healthy}
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    volumes:
+      - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
+    ports: ["127.0.0.1:4317:4317", "127.0.0.1:4318:4318"]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports: ["127.0.0.1:9090:9090"]
+
+  loki:
+    image: grafana/loki:3.2.0
+    command: ["-config.file=/etc/loki/local-config.yaml"]
+    ports: ["127.0.0.1:3100:3100"]
+
+  promtail:
+    image: grafana/promtail:3.2.0
+    command: ["-config.file=/etc/promtail/config.yml"]
+    volumes:
+      - ./promtail/config.yml:/etc/promtail/config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on: [loki]
+
+  grafana:
+    image: grafana/grafana:11.2.2
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${LOCAL_GRAFANA_PASSWORD:-local-only-grafana}
+    volumes:
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      # Dashboard e alertas versionados no GitOps (fonte única); sem contact points externos.
+      - ../gitops/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - ../gitops/observability/grafana/alerts:/etc/grafana/provisioning/alerting:ro
+    ports: ["127.0.0.1:3000:3000"]
+    depends_on: [prometheus, loki]

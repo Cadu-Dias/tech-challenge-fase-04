@@ -1,0 +1,44 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+  resource:
+    attributes:
+      - key: deployment.environment
+        value: local
+        action: upsert
+
+connectors:
+  # Gera métricas RED (taxa, erros, duração) a partir dos spans de cada serviço.
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s]
+    dimensions:
+      - name: http.response.status_code
+      - name: http.status_code
+
+exporters:
+  debug:
+    verbosity: basic
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion:
+      enabled: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [spanmetrics, debug]
+    metrics:
+      receivers: [otlp, spanmetrics]
+      processors: [resource, batch]
+      exporters: [prometheus]

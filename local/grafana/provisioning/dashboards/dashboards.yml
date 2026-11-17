@@ -1,0 +1,7 @@
+apiVersion: 1
+providers:
+  - name: togglemaster
+    folder: ToggleMaster
+    type: file
+    options:
+      path: /var/lib/grafana/dashboards
