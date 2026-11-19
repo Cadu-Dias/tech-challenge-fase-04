@@ -48,6 +48,9 @@ func (a *App) sendEvaluationEvent(ctx context.Context, userID, flagName string, 
 	defer span.End()
 	carrier := propagation.MapCarrier{}
 	otel.GetTextMapPropagator().Inject(ctx, carrier)
+	if signature := traceSignature(carrier["traceparent"]); signature != "" {
+		carrier["traceauth"] = signature
+	}
 	attributes := make(map[string]*sqs.MessageAttributeValue, len(carrier))
 	for key, value := range carrier {
 		attributes[key] = &sqs.MessageAttributeValue{DataType: aws.String("String"), StringValue: aws.String(value)}

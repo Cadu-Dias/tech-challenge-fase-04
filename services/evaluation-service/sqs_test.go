@@ -23,6 +23,9 @@ import (
 )
 
 func TestSQSPropagatesTraceContext(t *testing.T) {
+	oldKey := traceContextKey
+	traceContextKey = []byte(strings.Repeat("x", 32))
+	defer func() { traceContextKey = oldKey }()
 	oldProvider, oldPropagator := otel.GetTracerProvider(), otel.GetTextMapPropagator()
 	exporter := tracetest.NewInMemoryExporter()
 	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter)))
@@ -31,7 +34,7 @@ func TestSQSPropagatesTraceContext(t *testing.T) {
 		otel.SetTracerProvider(oldProvider)
 		otel.SetTextMapPropagator(oldPropagator)
 	}()
-	var traceparent string
+	var traceparent, signature string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var input struct {
 			MessageBody       string `json:"MessageBody"`
@@ -44,6 +47,7 @@ func TestSQSPropagatesTraceContext(t *testing.T) {
 			t.Error(err)
 		}
 		traceparent = input.MessageAttributes["traceparent"].StringValue
+		signature = input.MessageAttributes["traceauth"].StringValue
 		sum := md5.Sum([]byte(input.MessageBody)) // #nosec G401 -- SQS protocol checksum.
 		w.Header().Set("Content-Type", "application/x-amz-json-1.0")
 		fmt.Fprintf(w, `{"MessageId":"test","MD5OfMessageBody":"%s"}`, hex.EncodeToString(sum[:]))
@@ -68,6 +72,9 @@ func TestSQSPropagatesTraceContext(t *testing.T) {
 	}
 	if !strings.HasPrefix(traceparent, "00-"+spans[0].SpanContext.TraceID().String()+"-"+spans[0].SpanContext.SpanID().String()+"-") {
 		t.Fatalf("traceparent SQS inesperado: %q", traceparent)
+	}
+	if signature != traceSignature(traceparent) || signature == "" {
+		t.Fatal("assinatura do trace SQS ausente ou incorreta")
 	}
 }
 

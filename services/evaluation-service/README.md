@@ -6,6 +6,14 @@ Nos exemplos autenticados, `AUTH_HEADER_FILE` aponta para um arquivo privado for
 
 Ele é otimizado para alta velocidade e baixa latência usando **cache em Redis**.
 
+Cada chamada a `/evaluate` inicia um novo trace, sem aceitar `traceparent` ou
+`tracestate` do cliente. O novo contexto continua sendo propagado às chamadas
+internas e à SQS; traces de sistemas anteriores não são correlacionados.
+Isso não autentica as outras entradas de serviço nem o receptor OTLP.
+
+`HTTP_LISTEN_HOST` é opcional: vazio mantém a escuta em todas as interfaces;
+`127.0.0.1` restringe a escuta ao loopback em testes isolados.
+
 Ele funciona da seguinte forma:
 1.  Recebe uma requisição (`/evaluate?user_id=...&flag_name=...`).
 2.  Busca as regras da flag no **Redis**.

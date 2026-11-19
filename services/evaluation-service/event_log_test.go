@@ -36,7 +36,8 @@ func TestRequestEventCorrelatesWithoutRequestData(t *testing.T) {
 	if err := json.Unmarshal(output.Bytes(), &event); err != nil {
 		t.Fatal(err)
 	}
-	if event["trace_id"] != "0123456789abcdef0123456789abcdef" || event["route"] != "/evaluate" || event["status"] != float64(502) {
+	traceID, ok := event["trace_id"].(string)
+	if !ok || len(traceID) != 32 || traceID == "0123456789abcdef0123456789abcdef" || event["route"] != "/evaluate" || event["status"] != float64(502) {
 		t.Fatalf("evento inesperado: %v", event)
 	}
 	if strings.Contains(output.String(), "private-") {

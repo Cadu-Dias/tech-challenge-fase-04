@@ -5,6 +5,7 @@ import unittest
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 
 import responder
 
@@ -104,6 +105,60 @@ class ResponderTest(unittest.TestCase):
         self.assertEqual(self.api.patches, 1)
         self.assertEqual(results.count("restarted"), 1)
 
+    def test_inflight_other_incident_is_blocked_even_after_cooldown(self):
+        started = threading.Event()
+        release = threading.Event()
+        original_patch = self.api.patch_deployment
+        results = []
+
+        def blocked_patch(obj):
+            started.set()
+            if not release.wait(5):
+                raise responder.APIError(503, "test timed out")
+            return original_patch(obj)
+
+        self.api.patch_deployment = blocked_patch
+        thread = threading.Thread(target=lambda: results.append(self.worker.process(alert())))
+        thread.start()
+        try:
+            self.assertTrue(started.wait(5))
+            self.time += responder.COOLDOWN_SECONDS + 1
+            with self.assertRaises(responder.APIError) as raised:
+                self.worker.process(alert(fingerprint="b" * 16))
+            self.assertEqual(raised.exception.status, 409)
+            self.assertEqual(self.api.patches, 0)
+        finally:
+            release.set()
+            thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(results, ["restarted"])
+        self.assertEqual(self.worker.process(alert(fingerprint="b" * 16)), "restarted")
+        self.assertEqual(self.api.patches, 2)
+
+    def test_orphaned_reservation_blocks_other_incidents(self):
+        self.api.state["data"]["state"] = json.dumps({
+            "incidents": {"previous": "reserved"}, "last_restart": 1,
+        })
+        with self.assertRaises(responder.APIError):
+            self.worker.process(alert())
+        self.assertEqual(self.api.patches, 0)
+
+    def test_invalid_state_fails_closed(self):
+        for state in (
+            {"incidents": {"x": "unknown"}},
+            {"incidents": {}, "last_restart": float("nan")},
+            {"incidents": {}, "last_restart": True},
+        ):
+            with self.subTest(state=state):
+                self.api.state["data"]["state"] = json.dumps(state)
+                with self.assertRaises(responder.APIError):
+                    self.worker.process(alert())
+        self.assertEqual(self.api.patches, 0)
+
+    def test_initial_incident_at_epoch_is_not_in_cooldown(self):
+        self.time = 0
+        self.assertEqual(self.worker.process(alert()), "restarted")
+
     def test_http_auth_and_invalid_batch_cannot_patch(self):
         token = "synthetic-token-" + "x" * 32
         server = ThreadingHTTPServer(("127.0.0.1", 0), responder.handler(self.worker, token))
@@ -127,6 +182,10 @@ class ResponderTest(unittest.TestCase):
         self.assertEqual(post({"alerts": [alert()]}, "Bearer wrong"), 401)
         self.assertEqual(post({"alerts": [alert(), {"status": "firing"}]}, "Bearer " + token), 400)
         self.assertEqual(self.api.patches, 0)
+        self.api.state["data"]["state"] = json.dumps({"incidents": {"other": "reserved"}})
+        self.assertEqual(post({"alerts": [alert()]}, "Bearer " + token), 503)
+        self.assertEqual(self.api.patches, 0)
+        self.api.state["data"]["state"] = "{}"
         self.assertEqual(post({"alerts": [alert()]}, "Bearer " + token), 200)
         self.assertEqual(self.api.patches, 1)
 
@@ -143,6 +202,21 @@ class ResponderTest(unittest.TestCase):
         with self.assertRaises(responder.APIError):
             worker.process(alert())
         self.assertEqual(self.api.patches, 1)
+
+    def test_kubernetes_transport_and_invalid_json_fail_explicitly(self):
+        api = object.__new__(responder.Kubernetes)
+        api.base = "https://127.0.0.1"
+        api.token = "synthetic"
+        api.ssl = None
+        with patch("responder.urllib.request.urlopen", side_effect=TimeoutError):
+            with self.assertRaises(responder.APIError) as raised:
+                api.get_state()
+            self.assertEqual(raised.exception.status, 503)
+        with patch("responder.urllib.request.urlopen") as urlopen:
+            urlopen.return_value.__enter__.return_value.read.return_value = b"not-json"
+            with self.assertRaises(responder.APIError) as raised:
+                api.get_state()
+            self.assertEqual(raised.exception.status, 502)
 
 
 if __name__ == "__main__":

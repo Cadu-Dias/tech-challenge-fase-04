@@ -1,4 +1,6 @@
 import json
+import hashlib
+import hmac
 
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.metrics import MeterProvider
@@ -9,6 +11,36 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanE
 
 import telemetry
 from flask import Flask
+
+
+def test_http_context_requires_valid_signature(app_module, monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(resource=Resource({}))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(telemetry.trace, "get_tracer", lambda _: provider.get_tracer("test"))
+    key = b"x" * 32
+    monkeypatch.setattr(telemetry, "trace_context_key", key)
+    outgoing = []
+
+    def fake_get(url, headers, timeout):
+        outgoing.append(headers)
+        return type("Response", (), {"status_code": 200})()
+
+    monkeypatch.setattr(app_module.requests, "get", fake_get)
+    parent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+    signature = hmac.new(key, parent.encode(), hashlib.sha256).hexdigest()
+    for candidate in ("", "0" * 64, signature):
+        app_module.app.test_client().get(
+            "/flags/example", headers={"Authorization": "Bearer synthetic", "traceparent": parent,
+                                       "X-Trace-Auth": candidate}
+        )
+    server_spans = [span for span in exporter.get_finished_spans() if span.name == "/flags/<string:name>"]
+    assert len(server_spans) == 3
+    assert server_spans[0].parent is None and server_spans[1].parent is None
+    assert server_spans[2].parent.trace_id == int("0123456789abcdef0123456789abcdef", 16)
+    assert all(header["X-Trace-Auth"] == hmac.new(
+        key, header["traceparent"].encode(), hashlib.sha256).hexdigest() for header in outgoing)
+    provider.shutdown()
 
 
 def test_http_trace_propagates_without_request_data(app_module, monkeypatch):
@@ -36,12 +68,15 @@ def test_http_trace_propagates_without_request_data(app_module, monkeypatch):
         headers={
             "Authorization": "Bearer private-secret",
             "traceparent": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01",
+            "tracestate": "demo=private-canary",
         },
     )
     assert response.status_code == 200
     spans = exporter.get_finished_spans()
     client_span, server_span = spans
     assert server_span.parent.is_remote
+    assert not server_span.parent.trace_state
+    assert "tracestate" not in outgoing
     assert client_span.parent.span_id == server_span.context.span_id
     assert outgoing["traceparent"].startswith(
         "00-0123456789abcdef0123456789abcdef-" + format(client_span.context.span_id, "016x")

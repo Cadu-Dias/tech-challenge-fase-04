@@ -1,0 +1,39 @@
+connectors:
+  forward/datadog: {}
+processors:
+  filter/datadog:
+    error_mode: propagate
+    trace_conditions:
+      - resource.attributes["service.name"] != "auth-service" and resource.attributes["service.name"] != "flag-service" and resource.attributes["service.name"] != "targeting-service" and resource.attributes["service.name"] != "evaluation-service" and resource.attributes["service.name"] != "analytics-service"
+      - not IsMatch(span.name, "^(/evaluate|/validate|/admin/keys|/flags|/flags/<string:name>|/rules|/rules/<string:flag_name>|unmatched|redis get|redis set|GET flag-service|GET targeting-service|GET auth-service|sqs send|sqs process|sqs delete_message|dynamodb put_item|postgres validate key|postgres create key)$")
+      - Len(span.events) > 0
+      - Len(span.links) > 0
+  transform/datadog:
+    error_mode: propagate
+    trace_statements:
+      - set(resource.schema_url, "")
+      - set(scope.schema_url, "")
+      - keep_keys(resource.attributes, ["service.name"])
+      - keep_keys(scope.attributes, [])
+      - set(scope.name, "togglemaster")
+      - set(scope.version, "")
+      - keep_keys(span.attributes, [])
+      - set(span.trace_state, "")
+      - set(span.status.message, "")
+  batch/datadog:
+    timeout: 1s
+exporters:
+  otlphttp/datadog:
+    endpoint: https://otlp.${env:DD_SITE}
+    headers:
+      dd-api-key: ${env:DD_API_KEY}
+    sending_queue: {enabled: true, queue_size: 128}
+    retry_on_failure: {enabled: true, max_elapsed_time: 30s}
+service:
+  pipelines:
+    traces:
+      exporters: [spanmetrics, otlp/tempo, forward/datadog]
+    traces/datadog:
+      receivers: [forward/datadog]
+      processors: [filter/datadog, transform/datadog, batch/datadog]
+      exporters: [otlphttp/datadog]

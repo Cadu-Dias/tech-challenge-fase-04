@@ -45,3 +45,38 @@ tests:
       - expr: 'auth:5xx_ratio'
         eval_time: 2m
         exp_samples: []
+  - name: limite exato de 20 requisições e 5% não dispara
+    interval: 30s
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="200"}'
+        values: '0 5 10 14 19'
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="500"}'
+        values: '0 0 0 1 1'
+    promql_expr_test:
+      - expr: 'auth:5xx_ratio'
+        eval_time: 2m
+        exp_samples:
+          - labels: 'auth:5xx_ratio'
+            value: 0.05
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: togglemaster-auth-5xx
+        exp_alerts: []
+  - name: incidente sustentado e recuperação
+    interval: 30s
+    input_series:
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="200"}'
+        values: '0 10 20 30 40 50 60 70 80 90 100 110 120'
+      - series: 'http_server_request_duration_seconds_count{service_name="auth-service",http_response_status_code="500"}'
+        values: '0 1 2 3 4 5 6 6 6 6 6 6 6'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: togglemaster-auth-5xx
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: togglemaster-auth-5xx
+        exp_alerts:
+          - exp_labels: {service: auth-service, namespace: toggle, severity: critical}
+      - eval_time: 6m
+        alertname: togglemaster-auth-5xx
+        exp_alerts: []

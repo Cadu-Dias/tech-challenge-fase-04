@@ -43,15 +43,20 @@ func TestTraceHandlerAndClientPropagateWithoutRequestData(t *testing.T) {
 	}))
 	req := httptest.NewRequest(http.MethodGet, "/evaluate?user_id=private-user", nil)
 	req.Header.Set("traceparent", "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01")
+	req.Header.Set("tracestate", "untrusted=private-secret")
 	req.Header.Set("Authorization", "Bearer private-secret")
 	handler.ServeHTTP(httptest.NewRecorder(), req)
 
-	if !strings.HasPrefix(outbound, "00-0123456789abcdef0123456789abcdef-") {
-		t.Fatalf("traceparent não propagado: %q", outbound)
-	}
 	spans := exporter.GetSpans()
 	if len(spans) != 2 || spans[0].Parent.SpanID() != spans[1].SpanContext.SpanID() {
 		t.Fatalf("hierarquia de spans inesperada: %+v", spans)
+	}
+	root := spans[1]
+	if root.Parent.IsValid() || root.SpanContext.TraceID().String() == "0123456789abcdef0123456789abcdef" || root.SpanContext.TraceState().String() != "" {
+		t.Fatal("o contexto não confiável da entrada foi preservado")
+	}
+	if !strings.HasPrefix(outbound, "00-"+root.SpanContext.TraceID().String()+"-"+spans[0].SpanContext.SpanID().String()+"-") {
+		t.Fatalf("contexto interno não propagado: %q", outbound)
 	}
 	for _, span := range spans {
 		for _, attr := range span.Attributes {

@@ -1,0 +1,83 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: prometheus-local, namespace: toggle}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: toggle-local-kubelet-metrics}
+rules:
+  - apiGroups: [""]
+    resources: ["nodes/metrics"]
+    resourceNames: ["toggle-observability-control-plane"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: toggle-local-kubelet-metrics}
+subjects:
+  - {kind: ServiceAccount, name: prometheus-local, namespace: toggle}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: toggle-local-kubelet-metrics
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: kube-state-metrics-local, namespace: toggle}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata: {name: kube-state-metrics-local, namespace: toggle}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata: {name: kube-state-metrics-local, namespace: toggle}
+subjects:
+  - {kind: ServiceAccount, name: kube-state-metrics-local, namespace: toggle}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: kube-state-metrics-local
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: kube-state-metrics-local, namespace: toggle}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: kube-state-metrics-local}}
+  template:
+    metadata: {labels: {app: kube-state-metrics-local}}
+    spec:
+      serviceAccountName: kube-state-metrics-local
+      securityContext: {runAsNonRoot: true, runAsUser: 65534, seccompProfile: {type: RuntimeDefault}}
+      containers:
+        - name: kube-state-metrics
+          image: registry.k8s.io/kube-state-metrics/kube-state-metrics:v2.17.0
+          args:
+            - --namespaces=toggle
+            - --resources=pods,deployments
+            - --metric-allowlist=kube_pod_info,kube_pod_container_status_restarts_total,kube_deployment_status_replicas_available
+          ports: [{name: metrics, containerPort: 8080}, {name: telemetry, containerPort: 8081}]
+          readinessProbe: {httpGet: {path: /readyz, port: telemetry}, periodSeconds: 10}
+          livenessProbe: {httpGet: {path: /livez, port: metrics}, periodSeconds: 10}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: {drop: ["ALL"]}
+          resources:
+            requests: {cpu: "25m", memory: "40Mi"}
+            limits: {cpu: "200m", memory: "128Mi"}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: kube-state-metrics-local, namespace: toggle}
+spec:
+  selector: {app: kube-state-metrics-local}
+  ports: [{name: metrics, port: 8080, targetPort: metrics}]

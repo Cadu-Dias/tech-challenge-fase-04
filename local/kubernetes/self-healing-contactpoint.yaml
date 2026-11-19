@@ -1,0 +1,27 @@
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: local-self-healing
+    receivers:
+      - uid: local-self-healing
+        type: webhook
+        disableResolveMessage: true
+        settings:
+          url: https://toggle-self-healing.toggle.svc.cluster.local:8080/webhook
+          httpMethod: POST
+          maxAlerts: 20
+          authorization_scheme: Bearer
+          authorization_credentials: $SELF_HEALING_TOKEN
+policies:
+  - orgId: 1
+    receiver: grafana-default-email
+    group_by: [alertname, service, namespace]
+    routes:
+      - receiver: local-self-healing
+        object_matchers:
+          - [alertname, "=", "Auth com taxa elevada de erros 5xx"]
+          - [service, "=", "auth-service"]
+          - [namespace, "=", "toggle"]
+        group_wait: 0s
+        group_interval: 30s
+        repeat_interval: 4h

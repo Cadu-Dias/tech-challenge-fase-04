@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -121,7 +122,7 @@ func main() {
 	mux.Handle("/evaluate", traceHandler("/evaluate", http.HandlerFunc(app.evaluationHandler)))
 
 	log.Printf("Serviço de Avaliação (Go) rodando na porta %s", port)
-	server := &http.Server{Addr: ":" + port, Handler: mux, ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Addr: net.JoinHostPort(os.Getenv("HTTP_LISTEN_HOST"), port), Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	ctxSignal, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	shutdownDone := make(chan struct{})

@@ -1,0 +1,16 @@
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: validate-datadog-site
+          $patch: delete
+      containers:
+        - name: collector
+          args: [--config=/etc/collector/config.yaml]
+          env:
+            - {name: DD_SITE, $patch: delete}
+            - {name: DD_API_KEY, $patch: delete}
+          volumeMounts:
+            - {mountPath: /etc/datadog, $patch: delete}
+      volumes:
+        - {name: datadog-pipeline, $patch: delete}

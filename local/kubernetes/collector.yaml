@@ -1,0 +1,72 @@
+extensions:
+  bearertokenauth:
+    filename: /var/run/telemetry/token
+  bearertokenauth/authmetrics:
+    filename: /var/run/auth-metrics/token
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+        tls:
+          cert_file: /var/run/telemetry/tls.crt
+          key_file: /var/run/telemetry/tls.key
+        auth: {authenticator: bearertokenauth}
+      http:
+        endpoint: 0.0.0.0:4318
+        tls:
+          cert_file: /var/run/telemetry/tls.crt
+          key_file: /var/run/telemetry/tls.key
+        auth: {authenticator: bearertokenauth}
+  otlp/authmetrics:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4319
+        tls:
+          cert_file: /var/run/telemetry/tls.crt
+          key_file: /var/run/telemetry/tls.key
+        auth: {authenticator: bearertokenauth/authmetrics}
+processors:
+  batch: {}
+  resource:
+    attributes:
+      - {key: deployment.environment, value: local, action: upsert}
+connectors:
+  spanmetrics:
+    histogram:
+      explicit:
+        buckets: [5ms, 10ms, 25ms, 50ms, 100ms, 250ms, 500ms, 1s, 2s, 5s]
+    dimensions:
+      - {name: http.response.status_code}
+      - {name: http.status_code}
+exporters:
+  prometheus:
+    endpoint: 0.0.0.0:8889
+    resource_to_telemetry_conversion: {enabled: true}
+  prometheus/authmetrics:
+    endpoint: 0.0.0.0:8890
+    resource_to_telemetry_conversion: {enabled: true}
+  otlphttp/loki:
+    endpoint: http://loki.toggle.svc.cluster.local:3100/otlp
+  otlp/tempo:
+    endpoint: tempo.toggle.svc.cluster.local:4317
+    tls: {insecure: true}
+service:
+  extensions: [bearertokenauth, bearertokenauth/authmetrics]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [spanmetrics, otlp/tempo]
+    metrics:
+      receivers: [otlp, spanmetrics]
+      processors: [resource, batch]
+      exporters: [prometheus]
+    metrics/auth:
+      receivers: [otlp/authmetrics]
+      processors: [resource, batch]
+      exporters: [prometheus/authmetrics]
+    logs:
+      receivers: [otlp]
+      processors: [resource, batch]
+      exporters: [otlphttp/loki]

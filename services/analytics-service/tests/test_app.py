@@ -1,10 +1,35 @@
 """Testes de unidade para o analytics-service (health check e worker SQS)."""
 import json
+import hashlib
+import hmac
 
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+
+def test_sqs_context_requires_valid_signature(app_module, monkeypatch):
+    exporter = InMemorySpanExporter()
+    provider = TracerProvider(resource=Resource({}))
+    provider.add_span_processor(SimpleSpanProcessor(exporter))
+    monkeypatch.setattr(app_module.trace, "get_tracer", lambda _: provider.get_tracer("test"))
+    key = b"x" * 32
+    monkeypatch.setattr(app_module, "trace_context_key", key)
+    parent = "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"
+    signature = hmac.new(key, parent.encode(), hashlib.sha256).hexdigest()
+    message = {"MessageId": "msg", "ReceiptHandle": "receipt",
+               "Body": json.dumps({"user_id": "synthetic", "flag_name": "demo", "result": True,
+                                   "timestamp": "2024-01-01T00:00:00Z"})}
+    for candidate in ("", "0" * 64, signature):
+        message["MessageAttributes"] = {"traceparent": {"StringValue": parent},
+                                        "traceauth": {"StringValue": candidate}}
+        app_module.process_message(message)
+    spans = [span for span in exporter.get_finished_spans() if span.name == "sqs process"]
+    assert len(spans) == 3
+    assert spans[0].parent is None and spans[1].parent is None
+    assert spans[2].parent.trace_id == int("0123456789abcdef0123456789abcdef", 16)
+    provider.shutdown()
 
 
 def test_health_returns_ok(client):
@@ -81,7 +106,8 @@ def test_process_message_extracts_and_isolates_trace_context(app_module, monkeyp
             "timestamp": "2024-01-01T00:00:00Z",
         }),
         "MessageAttributes": {
-            "traceparent": {"StringValue": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"}
+            "traceparent": {"StringValue": "00-0123456789abcdef0123456789abcdef-0123456789abcdef-01"},
+            "tracestate": {"StringValue": "demo=private-canary"},
         },
     }
 
@@ -94,6 +120,8 @@ def test_process_message_extracts_and_isolates_trace_context(app_module, monkeyp
     assert first.context.trace_id == int("0123456789abcdef0123456789abcdef", 16)
     assert first.parent.span_id == int("0123456789abcdef", 16)
     assert first.parent.is_remote
+    assert not first.parent.trace_state
+    assert not first.context.trace_state
     assert second.parent is None
     assert second.context.trace_id != first.context.trace_id
     first_children = [span for span in spans if span.parent and span.parent.span_id == first.context.span_id]

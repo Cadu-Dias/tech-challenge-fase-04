@@ -1,7 +1,10 @@
 import os
 import sys
+import hashlib
+import hmac
 import threading
 import json
+import re
 import uuid
 import time
 import logging
@@ -25,6 +28,14 @@ if not event_log.handlers:
 
 # Carrega .env para desenvolvimento local
 load_dotenv()
+
+trace_context_key_file = os.getenv("TRACE_CONTEXT_HMAC_KEY_FILE")
+trace_context_key = None
+if trace_context_key_file:
+    with open(trace_context_key_file, "rb") as file:
+        trace_context_key = file.read(1025).strip()
+    if not 32 <= len(trace_context_key) <= 1024:
+        raise ValueError("chave de contexto de trace deve ter entre 32 e 1024 bytes")
 
 if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"):
     from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
@@ -95,9 +106,22 @@ def process_message(message):
     attrs = message.get("MessageAttributes", {})
     carrier = {
         key: attrs[key]["StringValue"]
-        for key in ("traceparent", "tracestate")
+        for key in ("traceparent",)
         if key in attrs and attrs[key].get("StringValue")
     }
+    if trace_context_key is not None:
+        signature = attrs.get("traceauth", {}).get("StringValue", "")
+        parent = carrier.get("traceparent", "")
+        try:
+            valid = bool(isinstance(parent, str) and parent and isinstance(signature, str) and
+                         re.fullmatch(r"[0-9a-f]{64}", signature) and
+                         hmac.compare_digest(
+                             hmac.new(trace_context_key, parent.encode("ascii"), hashlib.sha256).hexdigest(),
+                             signature))
+        except UnicodeEncodeError:
+            valid = False
+        if not valid:
+            carrier = {}
     context = TraceContextTextMapPropagator().extract(carrier)
     with trace.get_tracer("togglemaster.sqs").start_as_current_span(
         "sqs process", context=context, kind=SpanKind.CONSUMER
@@ -190,7 +214,7 @@ def sqs_worker_loop():
                 QueueUrl=SQS_QUEUE_URL,
                 MaxNumberOfMessages=10,  # Processa em lotes de até 10
                 WaitTimeSeconds=20,
-                MessageAttributeNames=["traceparent", "tracestate"],
+                MessageAttributeNames=["traceparent", "traceauth"],
             )
 
             messages = response.get('Messages', [])

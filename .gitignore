@@ -46,3 +46,4 @@ infra/backend.hcl
 infra/modules/argocd/.generated/
 infra/tfplan*
 infra/**/.generated/
+docs/**

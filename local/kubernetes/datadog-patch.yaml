@@ -1,0 +1,32 @@
+spec:
+  template:
+    spec:
+      initContainers:
+        - name: validate-datadog-site
+          image: python:3.11-slim
+          imagePullPolicy: Never
+          env:
+            - name: DD_SITE
+              valueFrom: {secretKeyRef: {name: datadog-credentials, key: site}}
+          command: [python, -c]
+          args:
+            - |
+              import os, sys
+              allowed = {"datadoghq.com", "datadoghq.eu", "us3.datadoghq.com",
+                         "us5.datadoghq.com", "ap1.datadoghq.com", "ap2.datadoghq.com",
+                         "ddog-gov.com"}
+              if os.environ["DD_SITE"] not in allowed:
+                  sys.exit("Site Datadog não reconhecido; envio bloqueado")
+      containers:
+        - name: collector
+          args: [--config=/etc/collector/config.yaml, --config=/etc/datadog/datadog-pipeline.yaml]
+          env:
+            - name: DD_SITE
+              valueFrom: {secretKeyRef: {name: datadog-credentials, key: site}}
+            - name: DD_API_KEY
+              valueFrom: {secretKeyRef: {name: datadog-credentials, key: api-key}}
+          volumeMounts:
+            - {name: datadog-pipeline, mountPath: /etc/datadog, readOnly: true}
+      volumes:
+        - name: datadog-pipeline
+          configMap: {name: collector-datadog}

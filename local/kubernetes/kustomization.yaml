@@ -1,0 +1,118 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../gitops/base/auth-service
+  - ../../gitops/base/flag-service
+  - ../../gitops/base/targeting-service
+  - ../../gitops/base/evaluation-service
+  - ../../gitops/base/analytics-service
+  - stack.yaml
+  - kubernetes-metrics.yaml
+patches:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+  - target:
+      group: apps
+      version: v1
+      kind: DaemonSet
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      labelSelector: app in (auth-service,flag-service,targeting-service,evaluation-service,analytics-service)
+    patch: |-
+      - op: replace
+        path: /spec/replicas
+        value: 1
+      - op: add
+        path: /spec/template/spec/containers/0/envFrom/-
+        value:
+          configMapRef:
+            name: local-common
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: TRACE_CONTEXT_HMAC_KEY_FILE
+            value: /var/run/telemetry/hmac-key
+          - name: OTEL_EXPORTER_OTLP_CERTIFICATE
+            value: /var/run/telemetry/tls.crt
+          - name: OTEL_EXPORTER_OTLP_HEADERS
+            valueFrom:
+              secretKeyRef: {name: telemetry-auth, key: headers}
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - {name: telemetry-auth, mountPath: /var/run/telemetry, readOnly: true}
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: telemetry-auth
+            secret:
+              secretName: telemetry-auth
+              items:
+                - {key: hmac-key, path: hmac-key}
+                - {key: tls.crt, path: tls.crt}
+  - target:
+      kind: ConfigMap
+      name: evaluation-config
+    patch: |-
+      - op: add
+        path: /data/REDIS_URL
+        value: redis://redis:6379
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: auth-service
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OTEL_EXPORTER_OTLP_METRICS_ENDPOINT
+          value: https://otel-collector.observability.svc.cluster.local:4319/v1/metrics
+      - op: add
+        path: /spec/template/spec/containers/0/env/-
+        value:
+          name: OTEL_EXPORTER_OTLP_METRICS_HEADERS
+          valueFrom:
+            secretKeyRef: {name: auth-metrics-client, key: headers}
+  - patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: evaluation-hpa
+        namespace: toggle
+  - patch: |-
+      $patch: delete
+      apiVersion: autoscaling/v2
+      kind: HorizontalPodAutoscaler
+      metadata:
+        name: analytics-hpa
+        namespace: toggle
+images:
+  - name: toggle/auth-service
+    newName: togglemaster-kind/auth-service
+    newTag: local
+  - name: toggle/flag-service
+    newName: togglemaster-kind/flag-service
+    newTag: local
+  - name: toggle/targeting-service
+    newName: togglemaster-kind/targeting-service
+    newTag: local
+  - name: toggle/evaluation-service
+    newName: togglemaster-kind/evaluation-service
+    newTag: local
+  - name: toggle/analytics-service
+    newName: togglemaster-kind/analytics-service
+    newTag: local

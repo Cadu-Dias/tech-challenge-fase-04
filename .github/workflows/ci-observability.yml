@@ -5,12 +5,14 @@ on:
     paths:
       - "automation/self-healing/**"
       - "gitops/observability/**"
+      - "local/kubernetes/**"
       - ".github/workflows/ci-observability.yml"
   push:
     branches: [main]
     paths:
       - "automation/self-healing/**"
       - "gitops/observability/**"
+      - "local/kubernetes/**"
       - ".github/workflows/ci-observability.yml"
 
 permissions:
@@ -29,5 +31,11 @@ jobs:
         run: python -m unittest -v
       - name: Test alert expression
         run: ruby gitops/observability/grafana/tests/test-alert.rb
+      - name: Test local observability safeguards
+        run: |
+          python local/kubernetes/test-datadog-gate.py
+          python local/kubernetes/test-grafana-responder-token.py
+          python -m compileall -q local/kubernetes
+          for script in local/kubernetes/*.sh; do sh -n "$script"; done
       - name: Build responder image without publishing
         run: docker build -t self-healing:test automation/self-healing

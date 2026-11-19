@@ -1,0 +1,10 @@
+spec:
+  template:
+    spec:
+      serviceAccountName: prometheus-local
+      containers:
+        - name: prometheus
+          volumeMounts:
+            - {name: kubelet-cert, mountPath: /etc/kubelet, readOnly: true}
+      volumes:
+        - {name: kubelet-cert, configMap: {name: kubelet-serving-cert}}

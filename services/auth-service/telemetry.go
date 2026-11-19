@@ -25,6 +25,9 @@ import (
 var eventLogger = slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 func initTelemetry(service string) (func(), error) {
+	if err := loadTraceContextKey(); err != nil {
+		return nil, err
+	}
 	otel.SetTextMapPropagator(propagation.TraceContext{})
 	res := resource.NewWithAttributes("", attribute.String("service.name", service))
 	var traces *sdktrace.TracerProvider
@@ -109,7 +112,13 @@ func traceHandler(route string, handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 		method := normalizedMethod(r.Method)
-		ctx := otel.GetTextMapPropagator().Extract(r.Context(), propagation.HeaderCarrier(r.Header))
+		carrier := propagation.HeaderCarrier(http.Header{})
+		parents, signatures := r.Header.Values("Traceparent"), r.Header.Values("X-Trace-Auth")
+		if len(parents) == 1 && (traceContextKey == nil ||
+			(len(signatures) == 1 && trustedTraceparent(parents[0], signatures[0]))) {
+			carrier.Set("traceparent", parents[0])
+		}
+		ctx := otel.GetTextMapPropagator().Extract(r.Context(), carrier)
 		ctx, span := otel.Tracer("togglemaster/http").Start(ctx, route, trace.WithSpanKind(trace.SpanKindServer),
 			trace.WithAttributes(attribute.String("http.request.method", method), attribute.String("http.route", route)))
 		defer span.End()

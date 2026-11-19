@@ -1,7 +1,10 @@
 import atexit
+import hashlib
+import hmac
 import json
 import logging
 import os
+import re
 import time
 
 from flask import g, request
@@ -17,9 +20,40 @@ event_log.propagate = False
 if not event_log.handlers:
     event_log.addHandler(logging.StreamHandler())
 propagator = TraceContextTextMapPropagator()
+trace_context_key = None
+
+
+def load_trace_context_key():
+    path = os.getenv("TRACE_CONTEXT_HMAC_KEY_FILE")
+    if not path:
+        return None
+    with open(path, "rb") as file:
+        key = file.read(1025).strip()
+    if not 32 <= len(key) <= 1024:
+        raise ValueError("chave de contexto de trace deve ter entre 32 e 1024 bytes")
+    return key
+
+
+def trace_signature(parent):
+    if trace_context_key is None or not parent:
+        return ""
+    return hmac.new(trace_context_key, parent.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+def trusted_traceparent(parent, signature):
+    if trace_context_key is None:
+        return True
+    if not parent or not re.fullmatch(r"[0-9a-f]{64}", signature):
+        return False
+    try:
+        return hmac.compare_digest(trace_signature(parent), signature)
+    except UnicodeEncodeError:
+        return False
 
 
 def instrument(app, service):
+    global trace_context_key
+    trace_context_key = load_trace_context_key()
     if os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT") or os.getenv("OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"):
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.sdk.resources import Resource
@@ -68,7 +102,11 @@ def instrument(app, service):
     def start_request_span():
         if request.path == "/health":
             return
-        parent = propagator.extract(request.headers)
+        traceparent = request.headers.get("traceparent", "")
+        signature = request.headers.get("X-Trace-Auth", "")
+        parent = propagator.extract({
+            "traceparent": traceparent if trusted_traceparent(traceparent, signature) else ""
+        })
         route = request.url_rule.rule if request.url_rule else "unmatched"
         method = request.method if request.method in {
             "GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"
@@ -127,6 +165,9 @@ def auth_get(url, auth_header):
     ) as span:
         headers = {"Authorization": auth_header}
         propagator.inject(headers)
+        signature = trace_signature(headers.get("traceparent", ""))
+        if signature:
+            headers["X-Trace-Auth"] = signature
         try:
             response = requests.get(url, headers=headers, timeout=3)
             if response.status_code >= 500:

@@ -1,8 +1,10 @@
 import hashlib
 import hmac
 import json
+import math
 import os
 import re
+import socket
 import ssl
 import time
 import urllib.error
@@ -45,8 +47,10 @@ class Kubernetes:
                 return json.load(response)
         except urllib.error.HTTPError as error:
             raise APIError(error.code, "Kubernetes API rejected request") from None
-        except urllib.error.URLError:
+        except (urllib.error.URLError, TimeoutError, socket.timeout):
             raise APIError(503, "Kubernetes API unavailable") from None
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            raise APIError(502, "invalid Kubernetes API response") from None
 
     def get_state(self):
         return self.call("GET", f"/api/v1/namespaces/{NAMESPACE}/configmaps/{STATE}")
@@ -122,18 +126,26 @@ class Responder:
 
         def reserve(state):
             records = state.setdefault("incidents", {})
-            if not isinstance(records, dict) or len(records) > MAX_RECORDS:
+            if not isinstance(records, dict) or len(records) > MAX_RECORDS or any(
+                not isinstance(key, str) or value not in ("reserved", "completed", "failed")
+                for key, value in records.items()
+            ):
                 raise APIError(500, "invalid state")
             if incident in records:
                 if records[incident] == "completed":
                     return "duplicate"
                 raise APIError(409, "previous attempt did not complete successfully")
+            if "reserved" in records.values():
+                raise APIError(409, "another attempt is in progress or requires review")
             if len(records) == MAX_RECORDS:
                 raise APIError(507, "incident state capacity reached")
-            last_restart = state.get("last_restart", 0)
-            if not isinstance(last_restart, (int, float)):
+            last_restart = state.get("last_restart")
+            if last_restart is not None and (
+                isinstance(last_restart, bool) or not isinstance(last_restart, (int, float))
+                or not math.isfinite(last_restart)
+            ):
                 raise APIError(500, "invalid state")
-            if timestamp - last_restart < COOLDOWN_SECONDS:
+            if last_restart is not None and timestamp - last_restart < COOLDOWN_SECONDS:
                 return "cooldown"
             records[incident] = "reserved"
             state["last_restart"] = timestamp
@@ -145,7 +157,7 @@ class Responder:
         try:
             deployment = self.api.get_deployment()
             replicas = deployment.get("spec", {}).get("replicas", 1)
-            if not isinstance(replicas, int) or replicas < 1:
+            if isinstance(replicas, bool) or not isinstance(replicas, int) or replicas < 1:
                 raise APIError(409, "deployment has no desired replicas")
             restart_id = datetime.now(timezone.utc).isoformat() + "-" + uuid.uuid4().hex
             patch = {
@@ -220,12 +232,17 @@ def handler(responder, token):
                     raise ValueError("invalid alerts")
                 for alert in alerts:
                     responder.validate(alert)
-                results = [responder.process(alert) for alert in alerts]
             except (ValueError, TypeError, AttributeError, json.JSONDecodeError):
                 self.send_error(400)
                 return
+            try:
+                results = [responder.process(alert) for alert in alerts]
             except APIError as error:
                 print(json.dumps({"event": "self_healing.error", "status": error.status}), flush=True)
+                self.send_error(503)
+                return
+            except (KeyError, TypeError, ValueError, OSError):
+                print(json.dumps({"event": "self_healing.error", "status": 500}), flush=True)
                 self.send_error(503)
                 return
             print(json.dumps({"event": "self_healing.result", "results": results}), flush=True)

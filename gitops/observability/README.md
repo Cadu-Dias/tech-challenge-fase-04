@@ -39,3 +39,9 @@ tem autenticação; somente um Service ClusterIP é criado. Não habilite envio
 externo antes de revisar a sanitização dos três sinais e o transporte.
 O gateway gera métricas de spans, mas não armazena traces: não há prova de APM
 ou incidentes apenas pela instalação desta stack.
+
+Os serviços descartam `tracestate` recebido em HTTP ou SQS. O
+`evaluation-service` também inicia um novo trace em `/evaluate`. A correlação
+interna continua usando `traceparent`, mas os demais serviços ainda aceitam
+IDs de origem não autenticada, assim como o gateway OTLP. Essas medidas não
+autorizam exportação de traces reais antes de proteger a origem e os IDs.

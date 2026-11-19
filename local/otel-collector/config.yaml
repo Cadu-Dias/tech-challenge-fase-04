@@ -48,18 +48,22 @@ exporters:
       enabled: true
   otlphttp/loki:
     endpoint: http://loki:3100/otlp
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
 
 service:
   pipelines:
     traces:
       receivers: [otlp]
       processors: [resource, batch]
-      exporters: [spanmetrics, debug]
+      exporters: [spanmetrics, otlp/tempo, debug]
     metrics:
       receivers: [otlp, spanmetrics]
       processors: [resource, batch]
       exporters: [prometheus]
     logs:
-      receivers: [loki]
+      receivers: [loki, otlp]
       processors: [groupbyattrs, resource/logs, batch]
       exporters: [otlphttp/loki]

@@ -1,0 +1,16 @@
+apiVersion: 1
+contactPoints:
+  - orgId: 1
+    name: local-pagerduty
+    receivers:
+      - uid: local-pagerduty
+        type: pagerduty
+        settings:
+          integrationKey: $PAGERDUTY_INTEGRATION_KEY
+  - orgId: 1
+    name: local-teams
+    receivers:
+      - uid: local-teams
+        type: teams
+        settings:
+          url: $TEAMS_WEBHOOK_URL

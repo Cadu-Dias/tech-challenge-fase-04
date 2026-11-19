@@ -62,7 +62,7 @@ services:
       PORT: "8001"
       DATABASE_URL: postgres://togglemaster:${LOCAL_DB_PASSWORD:-local-only-password}@postgres:5432/auth_db?sslmode=disable
       MASTER_KEY: ${LOCAL_MASTER_KEY:-local-master-key}
-    ports: ["127.0.0.1:8001:8001"]
+    ports: ["127.0.0.1:${LOCAL_AUTH_PORT:-8001}:8001"]
     depends_on:
       postgres: {condition: service_healthy}
 
@@ -74,7 +74,7 @@ services:
       PORT: "8002"
       DATABASE_URL: postgres://togglemaster:${LOCAL_DB_PASSWORD:-local-only-password}@postgres:5432/flag_db?sslmode=disable
       AUTH_SERVICE_URL: http://auth-service:8001
-    ports: ["127.0.0.1:8002:8002"]
+    ports: ["127.0.0.1:${LOCAL_FLAG_PORT:-8002}:8002"]
     depends_on: [auth-service]
 
   targeting-service:
@@ -85,7 +85,7 @@ services:
       PORT: "8003"
       DATABASE_URL: postgres://togglemaster:${LOCAL_DB_PASSWORD:-local-only-password}@postgres:5432/targeting_db?sslmode=disable
       AUTH_SERVICE_URL: http://auth-service:8001
-    ports: ["127.0.0.1:8003:8003"]
+    ports: ["127.0.0.1:${LOCAL_TARGETING_PORT:-8003}:8003"]
     depends_on: [auth-service]
 
   evaluation-service:
@@ -98,7 +98,7 @@ services:
       FLAG_SERVICE_URL: http://flag-service:8002
       TARGETING_SERVICE_URL: http://targeting-service:8003
       SERVICE_API_KEY: ${LOCAL_SERVICE_API_KEY:-local-service-key}
-    ports: ["127.0.0.1:8004:8004"]
+    ports: ["127.0.0.1:${LOCAL_EVALUATION_PORT:-8004}:8004"]
     depends_on:
       redis: {condition: service_healthy}
       localstack: {condition: service_healthy}
@@ -112,7 +112,7 @@ services:
       OTEL_SERVICE_NAME: analytics-service
       PORT: "8005"
       AWS_DYNAMODB_TABLE: ToggleMasterAnalytics
-    ports: ["127.0.0.1:8005:8005"]
+    ports: ["127.0.0.1:${LOCAL_ANALYTICS_PORT:-8005}:8005"]
     depends_on:
       localstack: {condition: service_healthy}
 
@@ -121,22 +121,31 @@ services:
     command: ["--config=/etc/otelcol/config.yaml"]
     volumes:
       - ./otel-collector/config.yaml:/etc/otelcol/config.yaml:ro
-    ports: ["127.0.0.1:4317:4317", "127.0.0.1:4318:4318"]
+    ports: ["127.0.0.1:${LOCAL_OTLP_GRPC_PORT:-4317}:4317", "127.0.0.1:${LOCAL_OTLP_HTTP_PORT:-4318}:4318"]
 
   prometheus:
     image: prom/prometheus:v2.54.1
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports: ["127.0.0.1:9090:9090"]
+    ports: ["127.0.0.1:${LOCAL_PROMETHEUS_PORT:-9090}:9090"]
 
   loki:
     image: grafana/loki:3.2.0
     command: ["-config.file=/etc/loki/local-config.yaml"]
-    ports: ["127.0.0.1:3100:3100"]
+    ports: ["127.0.0.1:${LOCAL_LOKI_PORT:-3100}:3100"]
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    volumes:
+      - ./tempo/tempo.yaml:/etc/tempo/tempo.yaml:ro
+    ports: ["127.0.0.1:${LOCAL_TEMPO_PORT:-3200}:3200"]
 
   promtail:
     image: grafana/promtail:3.2.0
-    command: ["-config.file=/etc/promtail/config.yml"]
+    command: ["-config.file=/etc/promtail/config.yml", "-config.expand-env=true"]
+    environment:
+      PROMTAIL_DOCKER_PROJECT: ${COMPOSE_PROJECT_NAME:-togglemaster-local}
     volumes:
       - ./promtail/config.yml:/etc/promtail/config.yml:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
@@ -154,5 +163,5 @@ services:
       # Dashboard e alertas versionados no GitOps (fonte única); sem contact points externos.
       - ../gitops/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - ../gitops/observability/grafana/alerts:/etc/grafana/provisioning/alerting:ro
-    ports: ["127.0.0.1:3000:3000"]
+    ports: ["127.0.0.1:${LOCAL_GRAFANA_PORT:-3000}:3000"]
     depends_on: [prometheus, loki]

@@ -185,6 +185,9 @@ func (a *App) doTracedRequest(req *http.Request, service string) (*http.Response
 	defer span.End()
 	req = req.WithContext(ctx)
 	otel.GetTextMapPropagator().Inject(ctx, propagation.HeaderCarrier(req.Header))
+	if signature := traceSignature(req.Header.Get("traceparent")); signature != "" {
+		req.Header.Set("X-Trace-Auth", signature)
+	}
 	resp, err := a.HttpClient.Do(req)
 	if err != nil {
 		span.SetStatus(codes.Error, "HTTP client error")

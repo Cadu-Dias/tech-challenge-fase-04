@@ -1,0 +1,134 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: datadog-synthetic-probe, namespace: observability}
+data:
+  collector.yaml: |
+    receivers:
+      otlp:
+        protocols:
+          http:
+            endpoint: 127.0.0.1:4318
+    processors:
+      filter/probe:
+        error_mode: propagate
+        trace_conditions:
+          - resource.attributes["service.name"] != "togglemaster-synthetic-probe"
+          - span.attributes["toggle.synthetic_probe"] != true
+          - Len(span.links) > 0
+          - Len(span.events) > 0
+      transform/probe:
+        error_mode: propagate
+        trace_statements:
+          - set(resource.schema_url, "")
+          - set(scope.schema_url, "")
+          - keep_keys(resource.attributes, ["service.name"])
+          - keep_keys(scope.attributes, [])
+          - set(scope.name, "synthetic-probe")
+          - set(scope.version, "")
+          - keep_keys(span.attributes, [])
+          - set(span.name, "synthetic.probe")
+          - set(span.trace_state, "")
+          - set(span.status.message, "")
+      batch: {timeout: 1s}
+    exporters:
+      otlphttp/datadog:
+        endpoint: https://otlp.${env:DD_SITE}
+        headers:
+          dd-api-key: ${env:DD_API_KEY}
+    service:
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [filter/probe, transform/probe, batch]
+          exporters: [otlphttp/datadog]
+  probe.py: |
+    import json
+    import re
+    import time
+    import urllib.error
+    import urllib.request
+    import uuid
+
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    end = time.time_ns()
+    payload = {"resourceSpans": [{
+        "resource": {"attributes": [{"key": "service.name", "value": {
+            "stringValue": "togglemaster-synthetic-probe"}}]},
+        "scopeSpans": [{"scope": {"name": "synthetic-probe"}, "spans": [{
+            "traceId": uuid.uuid4().hex,
+            "spanId": uuid.uuid4().hex[:16],
+            "name": "synthetic.probe",
+            "startTimeUnixNano": str(end - 1000000),
+            "endTimeUnixNano": str(end),
+            "attributes": [{"key": "toggle.synthetic_probe", "value": {"boolValue": True}}]
+        }]}]
+    }]}
+    deadline = time.monotonic() + 120
+    while True:
+        try:
+            request = urllib.request.Request("http://127.0.0.1:4318/v1/traces",
+                data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
+            with opener.open(request, timeout=5) as response:
+                if response.status != 200:
+                    raise RuntimeError("OTLP local rejeitado")
+            break
+        except urllib.error.URLError:
+            if time.monotonic() >= deadline:
+                raise RuntimeError("Collector isolado indisponível")
+            time.sleep(2)
+    while time.monotonic() < deadline:
+        try:
+            with opener.open("http://127.0.0.1:8888/metrics", timeout=5) as response:
+                metrics = response.read().decode()
+            sent = re.search(r'^otelcol_exporter_sent_spans\{[^}]*exporter="otlphttp/datadog"[^}]*\}\s+([0-9.]+)',
+                             metrics, re.MULTILINE)
+            if sent and float(sent.group(1)) >= 1:
+                print("Exportador confirmou envio de um span sintético.", flush=True)
+                break
+        except urllib.error.URLError:
+            pass
+        time.sleep(2)
+    else:
+        raise RuntimeError("Envio ao destino não foi confirmado")
+    while True:
+        time.sleep(60)
+---
+apiVersion: v1
+kind: Pod
+metadata: {name: datadog-synthetic-probe, namespace: observability}
+spec:
+  restartPolicy: Never
+  automountServiceAccountToken: false
+  initContainers:
+    - name: validate-site
+      image: python:3.11-slim
+      imagePullPolicy: Never
+      env:
+        - name: DD_SITE
+          valueFrom: {secretKeyRef: {name: datadog-credentials, key: site}}
+      command: [python, -c]
+      args:
+        - |
+          import os, sys
+          allowed = {"datadoghq.com", "datadoghq.eu", "us3.datadoghq.com",
+                     "us5.datadoghq.com", "ap1.datadoghq.com", "ap2.datadoghq.com",
+                     "ddog-gov.com"}
+          if os.environ["DD_SITE"] not in allowed:
+              sys.exit("Site Datadog não reconhecido; envio bloqueado")
+  containers:
+    - name: collector
+      image: otel/opentelemetry-collector-contrib:0.161.0
+      imagePullPolicy: Never
+      args: [--config=/etc/probe/collector.yaml]
+      env:
+        - name: DD_SITE
+          valueFrom: {secretKeyRef: {name: datadog-credentials, key: site}}
+        - name: DD_API_KEY
+          valueFrom: {secretKeyRef: {name: datadog-credentials, key: api-key}}
+      volumeMounts: [{name: config, mountPath: /etc/probe, readOnly: true}]
+    - name: generator
+      image: python:3.11-slim
+      imagePullPolicy: Never
+      command: [python, -u, /etc/probe/probe.py]
+      volumeMounts: [{name: config, mountPath: /etc/probe, readOnly: true}]
+  volumes: [{name: config, configMap: {name: datadog-synthetic-probe}}]
